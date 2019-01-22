@@ -3,6 +3,8 @@
 declare -A descs
 declare -A vars
 
+MAPD_TMP=$(mktemp -d)
+
 descs["MAPD_PATH"]="MapD install directory"
 vars["MAPD_PATH"]=${MAPD_PATH:=$(dirname $(pwd))}
 
@@ -14,10 +16,7 @@ vars["MAPD_USER"]=${MAPD_USER:=$(id --user --name)}
 descs["MAPD_GROUP"]="group MapD will be run as"
 vars["MAPD_GROUP"]=${MAPD_GROUP:=$(id --group --name)}
 
-descs["MAPD_LIBJVM_DIR"]="directory containing Java's libjvm.so"
-vars["MAPD_LIBJVM_DIR"]=${MAPD_LIBJVM_DIR:=$(bash ./find_libjvm_dir.sh)}
-
-for v in MAPD_PATH MAPD_STORAGE MAPD_USER MAPD_GROUP MAPD_LIBJVM_DIR; do
+for v in MAPD_PATH MAPD_STORAGE MAPD_USER MAPD_GROUP ; do
   echo "$v: ${descs["$v"]}"
   read -p "[${vars[$v]}]: "
   if [ ! -z "$REPLY" ]; then
@@ -26,14 +25,16 @@ for v in MAPD_PATH MAPD_STORAGE MAPD_USER MAPD_GROUP MAPD_LIBJVM_DIR; do
   echo
 done
 
-for v in MAPD_PATH MAPD_STORAGE MAPD_USER MAPD_GROUP MAPD_LIBJVM_DIR; do
+for v in MAPD_PATH MAPD_STORAGE MAPD_USER MAPD_GROUP ; do
   echo -e "$v:\t${vars[$v]}"
 done
 
 vars["MAPD_DATA"]=${MAPD_DATA:="${vars['MAPD_STORAGE']}/data"}
 sudo mkdir -p "${vars['MAPD_DATA']}"
 sudo mkdir -p "${vars['MAPD_STORAGE']}"
-sudo mkdir -p "${vars['MAPD_STORAGE']}/sds"
+if [ -f mapd-sds.conf.in ]; then
+  sudo mkdir -p "${vars['MAPD_STORAGE']}/sds"
+fi
 
 if [ ! -d "${vars['MAPD_DATA']}/mapd_catalogs" ]; then
   sudo ${vars["MAPD_PATH"]}/bin/initdb ${vars['MAPD_DATA']}
@@ -42,35 +43,36 @@ fi
 sudo chown -R ${vars['MAPD_USER']}:${vars['MAPD_GROUP']} "${vars['MAPD_DATA']}"
 sudo chown -R ${vars['MAPD_USER']}:${vars['MAPD_GROUP']} "${vars['MAPD_STORAGE']}"
 
+
 for f in mapd_server mapd_server@ mapd_sd_server mapd_sd_server@ mapd_web_server mapd_web_server@ ; do
-  sed -e "s#@MAPD_PATH@#${vars['MAPD_PATH']}#g" \
-      -e "s#@MAPD_STORAGE@#${vars['MAPD_STORAGE']}#g" \
-      -e "s#@MAPD_DATA@#${vars['MAPD_DATA']}#g" \
-      -e "s#@MAPD_USER@#${vars['MAPD_USER']}#g" \
-      -e "s#@MAPD_GROUP@#${vars['MAPD_GROUP']}#g" \
-      -e "s#@MAPD_LIBJVM_DIR@#${vars['MAPD_LIBJVM_DIR']}#g" \
-      $f.service.in > $f.service
-  sudo cp $f.service /lib/systemd/system/
+  if [ -f $f.service.in ]; then
+    sed -e "s#@MAPD_PATH@#${vars['MAPD_PATH']}#g" \
+        -e "s#@MAPD_STORAGE@#${vars['MAPD_STORAGE']}#g" \
+        -e "s#@MAPD_DATA@#${vars['MAPD_DATA']}#g" \
+        -e "s#@MAPD_USER@#${vars['MAPD_USER']}#g" \
+        -e "s#@MAPD_GROUP@#${vars['MAPD_GROUP']}#g" \
+        $f.service.in > $MAPD_TMP/$f.service
+    sudo cp $MAPD_TMP/$f.service /lib/systemd/system/
+  fi
 done
-if [ -f mapd_xorg.service ]; then
-	sudo cp mapd_xorg.service /lib/systemd/system/
-fi
 
 sed -e "s#@MAPD_PATH@#${vars['MAPD_PATH']}#g" \
     -e "s#@MAPD_STORAGE@#${vars['MAPD_STORAGE']}#g" \
     -e "s#@MAPD_DATA@#${vars['MAPD_DATA']}#g" \
     -e "s#@MAPD_USER@#${vars['MAPD_USER']}#g" \
     -e "s#@MAPD_GROUP@#${vars['MAPD_GROUP']}#g" \
-    -e "s#@MAPD_LIBJVM_DIR@#${vars['MAPD_LIBJVM_DIR']}#g" \
-    mapd.conf.in > mapd.conf
-sed -e "s#@MAPD_PATH@#${vars['MAPD_PATH']}#g" \
-    -e "s#@MAPD_STORAGE@#${vars['MAPD_STORAGE']}#g" \
-    -e "s#@MAPD_DATA@#${vars['MAPD_DATA']}#g" \
-    -e "s#@MAPD_USER@#${vars['MAPD_USER']}#g" \
-    -e "s#@MAPD_GROUP@#${vars['MAPD_GROUP']}#g" \
-    -e "s#@MAPD_LIBJVM_DIR@#${vars['MAPD_LIBJVM_DIR']}#g" \
-    mapd-sds.conf.in > mapd-sds.conf
-sudo cp mapd.conf mapd-sds.conf ${vars['MAPD_STORAGE']}
-sudo chown ${vars['MAPD_USER']}:${vars['MAPD_GROUP']} "${vars['MAPD_STORAGE']}/mapd.conf" "${vars['MAPD_STORAGE']}/mapd-sds.conf"
+    mapd.conf.in > $MAPD_TMP/mapd.conf
+if [ -f mapd-sds.conf.in ]; then
+  sed -e "s#@MAPD_PATH@#${vars['MAPD_PATH']}#g" \
+      -e "s#@MAPD_STORAGE@#${vars['MAPD_STORAGE']}#g" \
+      -e "s#@MAPD_DATA@#${vars['MAPD_DATA']}#g" \
+      -e "s#@MAPD_USER@#${vars['MAPD_USER']}#g" \
+      -e "s#@MAPD_GROUP@#${vars['MAPD_GROUP']}#g" \
+      mapd-sds.conf.in > $MAPD_TMP/mapd-sds.conf
+  sudo cp $MAPD_TMP/mapd-sds.conf ${vars['MAPD_STORAGE']}
+  sudo chown ${vars['MAPD_USER']}:${vars['MAPD_GROUP']} "${vars['MAPD_STORAGE']}/mapd-sds.conf"
+fi
+sudo cp $MAPD_TMP/mapd.conf ${vars['MAPD_STORAGE']}
+sudo chown ${vars['MAPD_USER']}:${vars['MAPD_GROUP']} "${vars['MAPD_STORAGE']}/mapd.conf"
 
 sudo systemctl daemon-reload

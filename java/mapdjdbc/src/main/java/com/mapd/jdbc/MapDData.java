@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package com.mapd.jdbc;
 
 import com.mapd.thrift.server.TColumn;
@@ -55,5 +54,4 @@ class MapDData {
   TColumn getTColumn() {
     return tcolumn;
   }
-
 }

@@ -21,7 +21,10 @@
 
 #include "ChunkIter.h"
 
-DEVICE static void decompress(const SQLTypeInfo& ti, int8_t* compressed, VarlenDatum* result, Datum* datum) {
+DEVICE static void decompress(const SQLTypeInfo& ti,
+                              int8_t* compressed,
+                              VarlenDatum* result,
+                              Datum* datum) {
   switch (ti.get_type()) {
     case kSMALLINT:
       result->length = sizeof(int16_t);
@@ -102,6 +105,9 @@ DEVICE static void decompress(const SQLTypeInfo& ti, int8_t* compressed, VarlenD
         case kENCODING_FIXED:
           datum->timeval = (time_t) * (int32_t*)compressed;
           break;
+        case kENCODING_DATE_IN_DAYS:
+          datum->timeval = (int32_t) * (int16_t*)compressed;
+          break;
         case kENCODING_RL:
         case kENCODING_DIFF:
         case kENCODING_DICT:
@@ -112,7 +118,8 @@ DEVICE static void decompress(const SQLTypeInfo& ti, int8_t* compressed, VarlenD
         default:
           assert(false);
       }
-      result->length = sizeof(time_t);
+      result->length = ti.get_compression() == kENCODING_DATE_IN_DAYS ? sizeof(int32_t)
+                                                                      : sizeof(time_t);
       result->pointer = (int8_t*)&datum->timeval;
       break;
     default:
@@ -125,7 +132,10 @@ void ChunkIter_reset(ChunkIter* it) {
   it->current_pos = it->start_pos;
 }
 
-DEVICE void ChunkIter_get_next(ChunkIter* it, bool uncompress, VarlenDatum* result, bool* is_end) {
+DEVICE void ChunkIter_get_next(ChunkIter* it,
+                               bool uncompress,
+                               VarlenDatum* result,
+                               bool* is_end) {
   if (it->current_pos >= it->end_pos) {
     *is_end = true;
     result->length = 0;
@@ -137,17 +147,20 @@ DEVICE void ChunkIter_get_next(ChunkIter* it, bool uncompress, VarlenDatum* resu
 
   if (it->skip_size > 0) {
     // for fixed-size
-    if (uncompress && it->type_info.get_compression() != kENCODING_NONE) {
+    if (uncompress && (it->type_info.get_compression() != kENCODING_NONE &&
+                       !(it->type_info.get_type() == kDATE &&
+                         it->type_info.get_compression() == kENCODING_DATE_IN_DAYS &&
+                         it->type_info.get_comp_param() == 0))) {
       decompress(it->type_info, it->current_pos, result, &it->datum);
     } else {
-      result->length = it->skip_size;
+      result->length = static_cast<size_t>(it->skip_size);
       result->pointer = it->current_pos;
       result->is_null = it->type_info.is_null(result->pointer);
     }
     it->current_pos += it->skip * it->skip_size;
   } else {
     StringOffsetT offset = *(StringOffsetT*)it->current_pos;
-    result->length = *((StringOffsetT*)it->current_pos + 1) - offset;
+    result->length = static_cast<size_t>(*((StringOffsetT*)it->current_pos + 1) - offset);
     result->pointer = it->second_buf + offset;
     // @TODO(wei) treat zero length as null for now
     result->is_null = (result->length == 0);
@@ -156,7 +169,11 @@ DEVICE void ChunkIter_get_next(ChunkIter* it, bool uncompress, VarlenDatum* resu
 }
 
 // @brief get nth element in Chunk.  Does not change ChunkIter state
-DEVICE void ChunkIter_get_nth(ChunkIter* it, int n, bool uncompress, VarlenDatum* result, bool* is_end) {
+DEVICE void ChunkIter_get_nth(ChunkIter* it,
+                              int n,
+                              bool uncompress,
+                              VarlenDatum* result,
+                              bool* is_end) {
   if (static_cast<size_t>(n) >= it->num_elems || n < 0) {
     *is_end = true;
     result->length = 0;
@@ -169,17 +186,20 @@ DEVICE void ChunkIter_get_nth(ChunkIter* it, int n, bool uncompress, VarlenDatum
   if (it->skip_size > 0) {
     // for fixed-size
     int8_t* current_pos = it->start_pos + n * it->skip_size;
-    if (uncompress && it->type_info.get_compression() != kENCODING_NONE) {
+    if (uncompress && (it->type_info.get_compression() != kENCODING_NONE &&
+                       !(it->type_info.get_type() == kDATE &&
+                         it->type_info.get_compression() == kENCODING_DATE_IN_DAYS &&
+                         it->type_info.get_comp_param() == 0))) {
       decompress(it->type_info, current_pos, result, &it->datum);
     } else {
-      result->length = it->skip_size;
+      result->length = static_cast<size_t>(it->skip_size);
       result->pointer = current_pos;
       result->is_null = it->type_info.is_null(result->pointer);
     }
   } else {
     int8_t* current_pos = it->start_pos + n * sizeof(StringOffsetT);
     StringOffsetT offset = *(StringOffsetT*)current_pos;
-    result->length = *((StringOffsetT*)current_pos + 1) - offset;
+    result->length = static_cast<size_t>(*((StringOffsetT*)current_pos + 1) - offset);
     result->pointer = it->second_buf + offset;
     // @TODO(wei) treat zero length as null for now
     result->is_null = (result->length == 0);
@@ -200,13 +220,13 @@ DEVICE void ChunkIter_get_nth(ChunkIter* it, int n, ArrayDatum* result, bool* is
   if (it->skip_size > 0) {
     // for fixed-size
     int8_t* current_pos = it->start_pos + n * it->skip_size;
-    result->length = it->skip_size;
+    result->length = static_cast<size_t>(it->skip_size);
     result->pointer = current_pos;
     result->is_null = it->type_info.is_null(result->pointer);
   } else {
     int8_t* current_pos = it->start_pos + n * sizeof(StringOffsetT);
     StringOffsetT offset = *(StringOffsetT*)current_pos;
-    result->length = *((StringOffsetT*)current_pos + 1) - offset;
+    result->length = static_cast<size_t>(*((StringOffsetT*)current_pos + 1) - offset);
     result->pointer = it->second_buf + offset;
     // @TODO(wei) treat zero length as null for now
     result->is_null = (result->length == 0);
